@@ -1,0 +1,122 @@
+---
+title: "st2195_assignment_9"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+``` 
+
+Initial set up: load data
+
+```{r}
+library(ggplot2) # for the plotting
+library(readr) # for reading csv files
+library(dplyr) # for manipulating data frames
+library(mlr3)
+library(mlr3learners)
+library(mlr3pipelines)
+library(mlr3tuning)
+library(paradox)
+library(mlr3viz)
+
+setwd("C:/Users/tsuji/Dropbox/study/UoL/ST2195 Programming for Data Science/lecture7/st2195_assignment_7")
+titanic <- read.csv("titanic.csv", header = TRUE)
+titanic$Survived <- as.factor(titanic$Survived)
+str(titanic) # quick view on the data
+summary(titanic) # summary of the data
+```
+Check missing data
+
+```{r}
+library(skimr)
+skim(titanic)
+```
+
+
+```{r}
+titanic <- titanic %>% mutate(FamilySize = SibSp + Parch + 1)
+breaks <- c(0, 0.01, seq(25, 150, by = 25), Inf)
+labels <- c("£0", "£1–£25", "£26–£50", "£51–£75", "£76–£100", "£101–£125", "£126–£150", "> £150")
+titanic$Fare_bin <- cut(titanic$Fare, breaks = breaks, labels = labels, right = FALSE, include.lowest = TRUE)
+titanic <- titanic %>% select(-Cabin, -Name, -Ticket, -PassengerId)
+titanic <- titanic %>% mutate(across(where(is.character), as.factor)) # Ensure categorical variables are factors
+```
+
+Set Up mlr3 Task
+```{r}
+task <- TaskClassif$new(id = "titanic", backend = titanic, target = "Survived")
+```
+
+Train-Test Split
+```{r}
+set.seed(1)
+train_set <- sample(task$nrow, 0.7 * task$nrow)
+test_set <- setdiff(seq_len(task$nrow), train_set)
+```
+
+Machine learning models
+```{r}
+library(mlr3viz)
+library(data.table)
+
+# Logistic Regression
+learner_logreg <- lrn("classif.log_reg", predict_type = "prob")
+graph <- po("imputemean") %>>% po("imputemode") %>>% po(learner_logreg)
+glrn <- GraphLearner$new(graph)
+glrn$train(task, row_ids = train_set)
+pred <- glrn$predict(task, row_ids = test_set)
+cat("Logistic Regression AUC:", pred$score(msr("classif.auc")), "\n")
+
+# Classification tree
+learner_tree <- lrn("classif.rpart", predict_type = "prob")
+graph_tree <- po("imputemean") %>>% po("imputemode") %>>% po(learner_tree)
+glrn_tree <- GraphLearner$new(graph_tree)
+glrn_tree$train(task, row_ids = train_set)
+pred_tree <- glrn_tree$predict(task, row_ids = test_set)
+cat("Classification tree AUC:", pred_tree$score(msr("classif.auc")), "\n")
+
+# Random forests
+learner_rf <- lrn("classif.ranger", predict_type = "prob")
+graph_rf <- po("imputemean") %>>% po("imputemode") %>>% po(learner_rf)
+glrn_rf <- GraphLearner$new(graph_rf)
+glrn_rf$train(task, row_ids = train_set)
+pred_rf <- glrn_rf$predict(task, row_ids = test_set)
+cat("Random forest AUC:", pred_rf$score(msr("classif.auc")), "\n")
+
+# Support vector machines (SVM)
+learner_svm <- lrn("classif.svm", predict_type = "prob")
+graph_svm <- po("imputemean") %>>% 
+  po("imputemode") %>>% 
+  po("encode") %>>%    # Encoding needed for SVM!
+  po(learner_svm)
+glrn_svm <- GraphLearner$new(graph_svm)
+glrn_svm$train(task, row_ids = train_set)
+pred_svm <- glrn_svm$predict(task, row_ids = test_set)
+cat("SVM AUC:", pred_svm$score(msr("classif.auc")), "\n")
+
+learners = list(
+  glrn,       # logistic regression
+  glrn_tree,  # classification tree
+  glrn_rf,    # random forest
+  glrn_svm    # svm
+)
+
+learners[[1]]$id = "Logistic Regression"
+learners[[2]]$id = "Classification Tree"
+learners[[3]]$id = "Random Forest"
+learners[[4]]$id = "SVM"
+
+bm_design = benchmark_grid(
+  tasks = task,
+  learners = learners,
+  resamplings = rsmp("holdout")
+)
+
+bmr = benchmark(bm_design)
+
+autoplot(bmr, type = "roc") + 
+  ggtitle("ROC Curves: Logistic, Tree, RF, SVM") + 
+  theme_minimal()
+
+```
